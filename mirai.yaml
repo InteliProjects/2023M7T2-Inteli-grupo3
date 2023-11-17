@@ -1,0 +1,174 @@
+---
+Parameters:
+
+  AvailabilityZone:
+    Type: String
+    Default: us-east-1a
+
+
+Resources:
+        
+  SizeTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: raw_parquet_size
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+  
+  ParquetApi:
+    Type: AWS::EC2::Instance
+    DependsOn: SizeTable
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      ImageId: ami-053b0d53c279acc90
+      InstanceType: t2.micro
+      IamInstanceProfile: EMR_EC2_DefaultRole
+      UserData: 
+        Fn::Base64:
+          | 
+          #!/bin/bash
+          sudo apt update -y
+
+          # Install Docker
+          sudo apt install docker.io -y
+
+          echo "TRYING TO CREATE STUFF"
+          sudo mkdir -p ~/.aws
+          sudo touch ~/.aws/config
+
+          echo "[default]" | sudo tee ~/.aws/config > /dev/null
+          echo "aws_access_key_id=ASIAW4OBNPCHYRGIGMBX" | sudo tee ~/.aws/config > /dev/null
+          echo "aws_secret_access_key=3TmIqkkno2ytuC2+hRQ50boF+EgiMKw+A5RRa1G3" | sudo tee ~/.aws/config > /dev/null
+          echo "aws_session_token=FwoGZXIvYXdzEIv//////////wEaDHFgd0he+S3hNPyx4SK9AQcQCpFHian18jW7gccJZP2fOcPZZYj9W5YxOWnVGHlHlQNGW0B07J+XjcCYPKaDVDleH+YJrSaqCmH7QqFj0VrCEfAZIL3DVsZW0TOtJeSJX0jhdSv6wkIaa4GiYiPb/oIrGnJh3FiudmPl4RjEitqgDkzGGQBPkyXHmVQiBZGgG/YiuhkqFWDY4DEjsud54uyDPrHRfDxp7OUVvSWWZCK7R7XuZlKb5aHeOU/zijlc18XjLoi/EL/TZl5Tlyj664KpBjItZ95i/USjcVkC7oJBs/fxn/q0LtXXFSBGQ9EhgnhfvS85vuFAsBDblxFAaRge" | sudo tee ~/.aws/config > /dev/null
+
+          cat ~/.aws/config
+          
+          sudo docker run -p 8000:8000 -d elisaflemer/parquet-api
+          
+
+      SecurityGroups:
+        - !Ref SSHSecurityGroup
+        - !Ref ParquetApiSecurityGroup
+  
+  Streamlit:
+    Type: AWS::EC2::Instance
+    DependsOn: ParquetApi
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      ImageId: ami-053b0d53c279acc90
+      InstanceType: t3.medium
+      UserData: 
+        Fn::Base64:
+          | 
+          #!/bin/bash
+          sudo apt update -y
+
+          # Install Docker
+          sudo apt install docker.io -y
+          
+          sudo docker run -p 8501:8501 -d elisaflemer/bluebird-streamlit
+          #!/bin/bash
+
+          # Get the current public IP address and store it in a variable
+          NEXT_PUBLIC_STREAMLIT_URL=$(dig +short myip.opendns.com @resolver1.opendns.com)
+
+          export NEXT_PUBLIC_STREAMLIT_URL
+
+          sudo -E docker run -p 3000:3000 -d -e NEXT_PUBLIC_STREAMLIT_URL elisaflemer/bluebird-next
+
+      SecurityGroups:
+        - !Ref SSHSecurityGroup
+        - !Ref HTTPSecurityGroup
+        - !Ref StreamlitSecurityGroup
+        
+
+    
+
+  SSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable SSH access via port 22
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: 22
+        ToPort: 22
+        IpProtocol: tcp
+
+  HTTPSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Enable standard web access
+      SecurityGroupIngress:
+        - CidrIp: "0.0.0.0/0"
+          FromPort: 3000
+          ToPort: 3000
+          IpProtocol: tcp
+          
+  StreamlitSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Enable standard web access
+      SecurityGroupIngress:
+        - CidrIp: "0.0.0.0/0"
+          FromPort: 8501
+          ToPort: 8501
+          IpProtocol: tcp
+          
+  ParquetApiSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Enable standard web access
+      SecurityGroupIngress:
+        - CidrIp: "0.0.0.0/0"
+          FromPort: 8000
+          ToPort: 8000
+          IpProtocol: tcp
+
+  DataRDS:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Ref DBInstanceIdentifier
+      AllocatedStorage: 20
+      DBInstanceClass: db.t2.micro
+      Engine: postgres
+      EngineVersion: 5.7
+      MasterUsername: admin
+      MasterUserPassword: admin
+      MultiAZ: false
+      PubliclyAccessible: false
+
+  RawParquets:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: raw_parquets
+
+  Models:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: models    
+      
+Outputs:
+  Streamlit:
+    Description: Public IP address and Port of the Streamlit instance
+    Value:
+      Fn::Join:
+        - ":"
+        - - !GetAtt Streamlit.PublicIp
+          - "8501"  # Replace with the desired port number
+  Next:
+    Description: Public IP address and Port of the Next instance
+    Value:
+      Fn::Join:
+        - ":"
+        - - !GetAtt Next.PublicIp
+          - "3000"  # Replace with the desired port number
+  DBEndpoint:
+    Description: Endpoint for the RDS instance
+    Value: !GetAtt DataRDS.Endpoint.Address

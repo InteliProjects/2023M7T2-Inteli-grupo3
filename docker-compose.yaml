@@ -1,0 +1,13 @@
+version: "3.7"
+services:
+  frontend:
+    image: elisaflemer/bluebird:latest
+    container_name: frontend
+    ports:
+      - 3000:3000
+  streamlit-app:
+    image: elisaflemer/streamlit:latest
+    restart: always
+    ports:
+      - 8501:8501
+    container_name: streamlit
